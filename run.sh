@@ -33,7 +33,6 @@ fi
 if [ "`echo ${NODE_HOST}`" == "" ]
 then
   NODE_HOST="127.0.0.1"
-
 fi
 
 if [ "`echo ${NODE_PORT}`" == "" ]
@@ -41,8 +40,8 @@ then
   NODE_PORT="7500"
 fi
 
-mkdir -p /var/run/mysqld 
-chown mysql:mysql /var/run/mysqld  
+mkdir -p /var/run/mysqld
+chown mysql:mysql /var/run/mysqld
 
 # Use touch here to workaround https://github.com/docker/for-linux/issues/72#issuecomment-319904698
 find /var/lib/mysql -type f -exec touch {} \;
@@ -50,16 +49,32 @@ mysqld --initialize-insecure
 echo 'port = 3307' >> /etc/mysql/my.cnf
 echo 'skip-name-resolve = 1' >> /etc/mysql/my.cnf
 mysqld &
-timeout 60 bash -c "until mysql -uroot -e 'select null limit 1'; do sleep 1; done" 
+timeout 60 bash -c "until mysql -uroot -e 'select null limit 1'; do sleep 1; done"
 
 # Setup tracker DB
 ## FIXME: mogdbsetup will report access denied... seems have no effect in the following run?
-mysql -uroot -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'super';" 
+mysql -uroot -e " ALTER USER 'root'@'localhost' IDENTIFIED BY 'super';\
+                  CREATE DATABASE mogilefs;" --skip-password
+mysql -uroot -psuper -e "CREATE USER 'mogile'@'localhost' IDENTIFIED BY 'mogilepw';\
+                         GRANT ALL PRIVILEGES ON mogilefs . * TO 'mogile'@'localhost' WITH GRANT OPTION;\
+                   FLUSH PRIVILEGES;"
 mogdbsetup --type=MySQL --yes --dbrootuser=root --dbrootpass=super --dbname=mogilefs --dbuser=mogile --dbpassword=mogilepw
 
 # Config mogilefs host/device/domain/classes
 sudo -u mogile mogilefsd -c /etc/mogilefs/mogilefsd.conf &
-sleep 5
+
+#wait until tracker is online
+until [[ "$(mogadm --trackers=127.0.0.1:7001 check | tr -d '\n')" =~ (Checking trackers[.\s ]*127\.0\.0\.1\:7001[ .]*OK) ]]; do sleep 1; done 2> /dev/null
+
+mkdir -p /etc/mogilefs \
+  && mkdir -p /var/mogdata/dev1 \
+  && mkdir -p /var/mogdata/dev2
+chown mogile -R /var/mogdata
+
+sudo -u mogile mogstored -c /etc/mogilefs/mogstored.conf > /tmp/mogstore_output &
+
+#wait till store is alive
+until [[ "$(cat /tmp/mogstore_output)" =~ Running ]]; do sleep 1; done 2> /dev/null
 
 mogadm --trackers=127.0.0.1:7001 host add mogilestorage --ip=${NODE_HOST} --port=${NODE_PORT} --status=alive
 mogadm --trackers=127.0.0.1:7001 device add mogilestorage 1
@@ -85,15 +100,8 @@ fi
 mogadm domain list
 mogadm class list
 
-
-mkdir -p /etc/mogilefs \
-  && mkdir -p /var/mogdata/dev1 \
-  && mkdir -p /var/mogdata/dev2
-chown mogile -R /var/mogdata
-
-set -m
-sudo -u mogile mogstored -c /etc/mogilefs/mogstored.conf &
-sleep 5
-
 mogadm check
-fg
+
+echo Container Ready!
+
+wait
