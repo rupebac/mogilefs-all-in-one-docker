@@ -1,31 +1,5 @@
 #!/bin/bash
 
-###### already inited #######
-
-MYSQL_FILE_COUNT=$(ls /var/lib/mysql|wc -l)
-if [ $MYSQL_FILE_COUNT != 0 ]; then
-  mkdir -p /var/run/mysqld 
-  chown mysql:mysql /var/run/mysqld  
-  rm /var/run/mysqld/*
-  find /var/lib/mysql -type f -exec touch {} \;
-
-  sed -i /port/d /etc/mysql/my.cnf
-  sed -i /skip-name-resolve/d /etc/mysql/my.cnf
-  echo 'port = 3307' >> /etc/mysql/my.cnf
-  echo 'skip-name-resolve = 1' >> /etc/mysql/my.cnf
-
-  mysqld &
-  sleep 3; timeout 60 bash -c "until mysql -uroot -psuper -e 'select null limit 1'; do sleep 1; done" 
-
-  set -m
-  sudo -u mogile mogstored -c /etc/mogilefs/mogstored.conf &
-  sudo -u mogile mogilefsd -c /etc/mogilefs/mogilefsd.conf &
-  sleep 5
-
-  mogadm check
-  fg
-fi
-
 ###### fresh run only #######
 
 if [ "`echo ${NODE_HOST}`" == "" ]
@@ -46,21 +20,20 @@ find /var/lib/mysql -type f -exec touch {} \;
 mysqld --initialize-insecure
 echo 'port = 3307' >> /etc/mysql/my.cnf
 echo 'skip-name-resolve = 1' >> /etc/mysql/my.cnf
-mysqld &
-timeout 60 bash -c "until mysql -uroot -e 'select null limit 1'; do sleep 1; done"
+mysqld 2>^1 > /tmp/mysqld_output &
+timeout 60 bash -c "until mysql -uroot -e 'select null limit 1' --skip-password; do sleep 1; done"
 
 # Setup tracker DB
-## FIXME: mogdbsetup will report access denied... seems have no effect in the following run?
 mysql -uroot -e " ALTER USER 'root'@'localhost' IDENTIFIED BY 'super';\
-                  CREATE DATABASE mogilefs;" --skip-password
+                  CREATE DATABASE mogilefs;" --skip-password --host localhost
+
 mysql -uroot -psuper -e "CREATE USER 'mogile'@'localhost' IDENTIFIED BY 'mogilepw';\
                          GRANT ALL PRIVILEGES ON mogilefs . * TO 'mogile'@'localhost' WITH GRANT OPTION;\
-                   FLUSH PRIVILEGES;"
+                         FLUSH PRIVILEGES;"  --host localhost
 mogdbsetup --type=MySQL --yes --dbrootuser=root --dbrootpass=super --dbname=mogilefs --dbuser=mogile --dbpassword=mogilepw
 
 # Config mogilefs host/device/domain/classes
 sudo -u mogile mogilefsd -c /etc/mogilefs/mogilefsd.conf &
-
 #wait until tracker is online
 until [[ "$(mogadm --trackers=127.0.0.1:7001 check | tr -d '\n')" =~ (Checking trackers[.\s ]*127\.0\.0\.1\:7001[ .]*OK) ]]; do sleep 1; done 2> /dev/null
 
@@ -69,9 +42,9 @@ mkdir -p /etc/mogilefs \
   && mkdir -p /var/mogdata/dev2
 chown mogile -R /var/mogdata
 
+
 sudo -u mogile mogstored -c /etc/mogilefs/mogstored.conf > /tmp/mogstore_output &
 
-#wait till store is alive
 until [[ "$(cat /tmp/mogstore_output)" =~ Running ]]; do sleep 1; done 2> /dev/null
 
 mogadm --trackers=127.0.0.1:7001 host add mogilestorage --ip=${NODE_HOST} --port=${NODE_PORT} --status=alive
