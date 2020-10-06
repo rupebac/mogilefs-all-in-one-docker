@@ -1,5 +1,31 @@
 #!/bin/bash
 
+###### already inited #######
+
+MYSQL_FILE_COUNT=$(ls /var/lib/mysql|wc -l)
+if [ $MYSQL_FILE_COUNT != 0 ]; then
+  mkdir -p /var/run/mysqld
+  chown mysql:mysql /var/run/mysqld
+  rm /var/run/mysqld/*
+  find /var/lib/mysql -type f -exec touch {} \;
+
+  sed -i /port/d /etc/mysql/my.cnf
+  sed -i /skip-name-resolve/d /etc/mysql/my.cnf
+  echo 'port = 3307' >> /etc/mysql/my.cnf
+  echo 'skip-name-resolve = 1' >> /etc/mysql/my.cnf
+
+  mysqld &
+  sleep 3; timeout 60 bash -c "until mysql -uroot -psuper -e 'select null limit 1'; do sleep 1; done"
+
+  set -m
+  sudo -u mogile mogstored -c /etc/mogilefs/mogstored.conf &
+  sudo -u mogile mogilefsd -c /etc/mogilefs/mogilefsd.conf &
+  sleep 5
+
+  mogadm check
+  fg
+fi
+
 ###### fresh run only #######
 
 if [ "`echo ${NODE_HOST}`" == "" ]
